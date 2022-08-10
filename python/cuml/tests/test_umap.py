@@ -483,19 +483,21 @@ def test_umap_knn_parameters(n_neighbors):
         n_samples=2000, n_features=10, centers=5, random_state=0)
     data = data.astype(np.float32)
 
-    def fit_transform_embed(knn_graph=None):
+    def fit_transform_embed(knn_graph):
         model = cuUMAP(random_state=42,
                        init='random',
                        n_neighbors=n_neighbors)
-        return model.fit_transform(data, knn_graph=knn_graph,
+        print('type(knn_graph):', type(knn_graph))
+        return model.fit_transform(knn_graph,
+                                   precomputed=True,
                                    convert_dtype=True)
 
-    def transform_embed(knn_graph=None):
+    def transform_embed(knn_graph):
         model = cuUMAP(random_state=42,
                        init='random',
                        n_neighbors=n_neighbors)
-        model.fit(data, knn_graph=knn_graph, convert_dtype=True)
-        return model.transform(data, knn_graph=knn_graph,
+        return model.transform(knn_graph,
+                               precomputed=True,
                                convert_dtype=True)
 
     def test_trustworthiness(embedding):
@@ -511,26 +513,19 @@ def test_umap_knn_parameters(n_neighbors):
     neigh.fit(data)
     knn_graph = neigh.kneighbors_graph(data, mode="distance")
 
-    embedding1 = fit_transform_embed(None)
-    embedding2 = fit_transform_embed(knn_graph.tocsr())
-    embedding3 = fit_transform_embed(knn_graph.tocoo())
-    embedding4 = fit_transform_embed(knn_graph.tocsc())
-    embedding5 = transform_embed(knn_graph.tocsr())
-    embedding6 = transform_embed(knn_graph.tocoo())
-    embedding7 = transform_embed(knn_graph.tocsc())
+    embedding1 = fit_transform_embed(knn_graph.tocsr())
+    embedding2 = fit_transform_embed(knn_graph.tocoo())
+    embedding3 = fit_transform_embed(knn_graph.tocsc())
+    embedding4 = transform_embed(knn_graph.tocsr())
+    embedding5 = transform_embed(knn_graph.tocoo())
+    embedding6 = transform_embed(knn_graph.tocsc())
 
     test_trustworthiness(embedding1)
-    test_trustworthiness(embedding2)
-    test_trustworthiness(embedding3)
-    test_trustworthiness(embedding4)
-    test_trustworthiness(embedding5)
-    test_trustworthiness(embedding6)
-    test_trustworthiness(embedding7)
 
+    test_equality(embedding1, embedding2)
     test_equality(embedding2, embedding3)
     test_equality(embedding3, embedding4)
     test_equality(embedding5, embedding6)
-    test_equality(embedding6, embedding7)
 
 
 def correctness_sparse(a, b, atol=0.1, rtol=0.2, threshold=0.95):

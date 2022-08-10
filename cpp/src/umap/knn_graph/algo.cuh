@@ -143,20 +143,6 @@ void launcher(const raft::handle_t& handle,
   out.knn_dists   = inputsA.knn_graph.knn_dists;
 }
 
-// Instantiation for precomputed inputs, int indices
-template <>
-void launcher(const raft::handle_t& handle,
-              const ML::manifold_precomputed_knn_inputs_t<int, float>& inputsA,
-              const ML::manifold_precomputed_knn_inputs_t<int, float>& inputsB,
-              ML::knn_graph<int, float>& out,
-              int n_neighbors,
-              const ML::UMAPParams* params,
-              cudaStream_t stream)
-{
-  out.knn_indices = inputsA.knn_graph.knn_indices;
-  out.knn_dists   = inputsA.knn_graph.knn_dists;
-}
-
 }  // namespace Algo
 }  // namespace kNNGraph
 };  // namespace UMAPAlgo

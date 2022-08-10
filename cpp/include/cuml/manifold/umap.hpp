@@ -142,8 +142,6 @@ void fit_sparse(const raft::handle_t& handle,
  * @param[in] X: pointer to input array to be infered
  * @param[in] n: n_samples of input array to be infered
  * @param[in] d: n_features of input array to be infered
- * @param[in] knn_indices: pointer to knn_indices of input (optional)
- * @param[in] knn_dists: pointer to knn_dists of input (optional)
  * @param[in] orig_X: pointer to original training array
  * @param[in] orig_n: number of rows in original training array
  * @param[in] embedding: pointer to embedding created during training
@@ -155,8 +153,6 @@ void transform(const raft::handle_t& handle,
                float* X,
                int n,
                int d,
-               int64_t* knn_indices,
-               float* knn_dists,
                float* orig_X,
                int orig_n,
                float* embedding,

@@ -99,8 +99,6 @@ cdef extern from "cuml/manifold/umap.hpp" namespace "ML::UMAP":
                    float * X,
                    int n,
                    int d,
-                   int64_t * knn_indices,
-                   float * knn_dists,
                    float * orig_X,
                    int orig_n,
                    float * embedding,
@@ -481,72 +479,69 @@ class UMAP(Base,
     @generate_docstring(convert_dtype_cast='np.float32',
                         X='dense_sparse',
                         skip_parameters_heading=True)
-    def fit(self, X, y=None, convert_dtype=True,
-            knn_graph=None) -> "UMAP":
+    def fit(self, X, y=None, precomputed=False,
+            convert_dtype=True) -> "UMAP":
         """
         Fit X into an embedded space.
 
         Parameters
         ----------
-        knn_graph : sparse array-like (device or host)
-            shape=(n_samples, n_samples)
-            A sparse array containing the k-nearest neighbors of X,
-            where the columns are the nearest neighbor indices
-            for each row and the values are their distances.
-            It's important that `k>=n_neighbors`,
-            so that UMAP can model the neighbors from this graph,
-            instead of building its own internally.
-            Users using the knn_graph parameter provide UMAP
-            with their own run of the KNN algorithm. This allows the user
-            to pick a custom distance function (sometimes useful
-            on certain datasets) whereas UMAP uses euclidean by default.
-            The custom distance function should match the metric used
-            to train UMAP embeedings. Storing and reusing a knn_graph
-            will also provide a speedup to the UMAP algorithm
-            when performing a grid search.
-            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
-            CSR/COO preferred other formats will go through conversion to CSR
+        precomputed : boolean, False by default
+            When set to True, X should be provided in the form of
+            a sparse array containing the k-nearest neighbors of the input.
+            This allows the use of a custom metrics whereas UMAP
+            would otherwise use the euclidean distance.
+            Acceptable formats for the KNN graph:
+            Sparse SciPy or CuPy ndarray of shape (n_samples1, n_samples2),
+            CSR/COO preferred, other formats will go through conversion to CSR
         """
         if len(X.shape) != 2:
             raise ValueError("data should be two dimensional")
 
-        if y is not None and knn_graph is not None\
+        if y is not None and precomputed is True\
                 and self.target_metric != "categorical":
             raise ValueError("Cannot provide a KNN graph when in \
             semi-supervised mode with categorical target_metric for now.")
 
-        # Handle sparse inputs
-        if is_sparse(X):
+        self.sparse_fit = is_sparse(X) and not precomputed
 
-            self.X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
-                                       convert_format=False)
-            self.n_rows, self.n_dims = self.X_m.shape
-            self.sparse_fit = True
+        knn_indices_m, knn_indices_ctype = None, 0
+        knn_dists_m, knn_dists_ctype = None, 0
+        cdef uintptr_t X_ptr = 0
 
-        # Handle dense inputs
-        else:
+        # Precomputed distance matrix in the form of a KNN graph
+        if precomputed:
+            (knn_indices_m, knn_indices_ctype),
+            (knn_dists_m, knn_dists_ctype) =\
+                extract_knn_graph(X, convert_dtype)
+            self.n_rows, self.n_dims = X.shape
+            index = None
+        # Dense input
+        elif not is_sparse(X):
             self.X_m, self.n_rows, self.n_dims, dtype = \
                 input_to_cuml_array(X, order='C', check_dtype=np.float32,
                                     convert_to_dtype=(np.float32
                                                       if convert_dtype
                                                       else None))
+            X_ptr = self.X_m.ptr
+            index = self.X_m.index
+        # Sparse input
+        else:
+            self.X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
+                                       convert_format=False)
+            self.n_rows, self.n_dims = self.X_m.shape
+            index = self.X_m.index
 
         if self.n_rows <= 1:
             raise ValueError("There needs to be more than 1 sample to "
                              "build nearest the neighbors graph")
-
-        (knn_indices_m, knn_indices_ctype), (knn_dists_m, knn_dists_ctype) =\
-            extract_knn_graph(knn_graph, convert_dtype)
-
-        cdef uintptr_t knn_indices_raw = knn_indices_ctype or 0
-        cdef uintptr_t knn_dists_raw = knn_dists_ctype or 0
 
         self.n_neighbors = min(self.n_rows, self.n_neighbors)
 
         self.embedding_ = CumlArray.zeros((self.n_rows,
                                            self.n_components),
                                           order="C", dtype=np.float32,
-                                          index=self.X_m.index)
+                                          index=index)
 
         if self.hash_input:
             with using_output_type("numpy"):
@@ -561,7 +556,6 @@ class UMAP(Base,
             <UMAPParams*> <size_t> UMAP._build_umap_params(self)
 
         cdef uintptr_t y_raw = 0
-
         if y is not None:
             y_m, _, _, _ = \
                 input_to_cuml_array(y, check_dtype=np.float32,
@@ -586,12 +580,12 @@ class UMAP(Base,
 
         else:
             fit(handle_[0],
-                <float*> <uintptr_t> self.X_m.ptr,
+                <float*> X_ptr,
                 <float*> y_raw,
                 <int> self.n_rows,
                 <int> self.n_dims,
-                <int64_t*> knn_indices_raw,
-                <float*> knn_dists_raw,
+                <int64_t*><uintptr_t> knn_indices_ctype,
+                <float*><uintptr_t> knn_dists_ctype,
                 <UMAPParams*>umap_params,
                 <float*>embed_raw,
                 <COO*> fss_graph.get())
@@ -613,8 +607,8 @@ class UMAP(Base,
                                                        low-dimensional space.',
                                        'shape': '(n_samples, n_components)'})
     @cuml.internals.api_base_fit_transform()
-    def fit_transform(self, X, y=None, convert_dtype=True,
-                      knn_graph=None) -> CumlArray:
+    def fit_transform(self, X, y=None, precomputed=False,
+                      convert_dtype=True) -> CumlArray:
         """
         Fit X into an embedded space and return that transformed
         output.
@@ -627,27 +621,17 @@ class UMAP(Base,
 
         Parameters
         ----------
-        knn_graph : sparse array-like (device or host)
-            shape=(n_samples, n_samples)
-            A sparse array containing the k-nearest neighbors of X,
-            where the columns are the nearest neighbor indices
-            for each row and the values are their distances.
-            It's important that `k>=n_neighbors`,
-            so that UMAP can model the neighbors from this graph,
-            instead of building its own internally.
-            Users using the knn_graph parameter provide UMAP
-            with their own run of the KNN algorithm. This allows the user
-            to pick a custom distance function (sometimes useful
-            on certain datasets) whereas UMAP uses euclidean by default.
-            The custom distance function should match the metric used
-            to train UMAP embeedings. Storing and reusing a knn_graph
-            will also provide a speedup to the UMAP algorithm
-            when performing a grid search.
-            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
-            CSR/COO preferred other formats will go through conversion to CSR
+        precomputed : boolean, False by default
+            When set to True, X should be provided in the form of
+            a sparse array containing the k-nearest neighbors of the input.
+            This allows the use of a custom metrics whereas UMAP
+            would otherwise use the euclidean distance.
+            Acceptable formats for the KNN graph:
+            Sparse SciPy or CuPy ndarray of shape (n_samples1, n_samples2),
+            CSR/COO preferred, other formats will go through conversion to CSR
 
         """
-        self.fit(X, y, convert_dtype=convert_dtype, knn_graph=knn_graph)
+        self.fit(X, y, precomputed=precomputed, convert_dtype=convert_dtype)
 
         return self.embedding_
 
@@ -659,7 +643,7 @@ class UMAP(Base,
                                                        data in \
                                                        low-dimensional space.',
                                        'shape': '(n_samples, n_components)'})
-    def transform(self, X, convert_dtype=True, knn_graph=None) -> CumlArray:
+    def transform(self, X, convert_dtype=True) -> CumlArray:
         """
         Transform X into the existing embedded space and return that
         transformed output.
@@ -670,28 +654,6 @@ class UMAP(Base,
 
         Specifically, the transform() function is stochastic:
         https://github.com/lmcinnes/umap/issues/158
-
-        Parameters
-        ----------
-        knn_graph : sparse array-like (device or host)
-            shape=(n_samples, n_samples)
-            A sparse array containing the k-nearest neighbors of X,
-            where the columns are the nearest neighbor indices
-            for each row and the values are their distances.
-            It's important that `k>=n_neighbors`,
-            so that UMAP can model the neighbors from this graph,
-            instead of building its own internally.
-            Users using the knn_graph parameter provide UMAP
-            with their own run of the KNN algorithm. This allows the user
-            to pick a custom distance function (sometimes useful
-            on certain datasets) whereas UMAP uses euclidean by default.
-            The custom distance function should match the metric used
-            to train UMAP embeedings. Storing and reusing a knn_graph
-            will also provide a speedup to the UMAP algorithm
-            when performing a grid search.
-            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
-            CSR/COO preferred other formats will go through conversion to CSR
-
         """
         if len(X.shape) != 2:
             raise ValueError("X should be two dimensional")
@@ -711,14 +673,12 @@ class UMAP(Base,
         if is_sparse(X):
             X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
                                   convert_format=False)
-            index = None
         else:
             X_m, n_rows, n_cols, dtype = \
                 input_to_cuml_array(X, order='C', check_dtype=np.float32,
                                     convert_to_dtype=(np.float32
                                                       if convert_dtype
                                                       else None))
-            index = X_m.index
         n_rows = X_m.shape[0]
         n_cols = X_m.shape[1]
 
@@ -735,14 +695,8 @@ class UMAP(Base,
         embedding = CumlArray.zeros((X_m.shape[0],
                                     self.n_components),
                                     order="C", dtype=np.float32,
-                                    index=index)
+                                    index=X_m.index)
         cdef uintptr_t xformed_ptr = embedding.ptr
-
-        (knn_indices_m, knn_indices_ctype), (knn_dists_m, knn_dists_ctype) =\
-            extract_knn_graph(knn_graph, convert_dtype)
-
-        cdef uintptr_t knn_indices_raw = knn_indices_ctype or 0
-        cdef uintptr_t knn_dists_raw = knn_dists_ctype or 0
 
         cdef handle_t * handle_ = \
             <handle_t*> <size_t> self.handle.getHandle()
@@ -774,8 +728,6 @@ class UMAP(Base,
                       <float*><uintptr_t> X_m.ptr,
                       <int> X_m.shape[0],
                       <int> X_m.shape[1],
-                      <int64_t*> knn_indices_raw,
-                      <float*> knn_dists_raw,
                       <float*><uintptr_t>self.X_m.ptr,
                       <int> self.n_rows,
                       <float*> embed_ptr,
