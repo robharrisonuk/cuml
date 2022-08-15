@@ -392,28 +392,20 @@ class TSNE(Base,
     @generate_docstring(skip_parameters_heading=True,
                         X='dense_sparse',
                         convert_dtype_cast='np.float32')
-    def fit(self, X, convert_dtype=True, knn_graph=None) -> "TSNE":
+    def fit(self, X, precomputed=False, convert_dtype=True) -> "TSNE":
         """
         Fit X into an embedded space.
 
         Parameters
         -----------
-        knn_graph : sparse array-like (device or host), \
-                shape=(n_samples, n_samples)
-            A sparse array containing the k-nearest neighbors of X,
-            where the columns are the nearest neighbor indices
-            for each row and the values are their distances.
-            Users using the knn_graph parameter provide t-SNE
-            with their own run of the KNN algorithm. This allows the user
-            to pick a custom distance function (sometimes useful
-            on certain datasets) whereas t-SNE uses euclidean by default.
-            The custom distance function should match the metric used
-            to train t-SNE embeedings. Storing and reusing a knn_graph
-            will also provide a speedup to the t-SNE algorithm
-            when performing a grid search.
-            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
-            CSR/COO preferred other formats will go through conversion to CSR
-
+        precomputed : boolean, False by default
+            When set to True, X should be provided in the form of
+            a sparse array containing the k-nearest neighbors of the input.
+            This allows the use of a custom metrics whereas UMAP
+            would otherwise use the euclidean distance.
+            Acceptable formats for the KNN graph:
+            Sparse SciPy or CuPy ndarray of shape (n_samples1, n_samples2),
+            CSR/COO preferred, other formats will go through conversion to CSR
         """
         cdef int n, p
         cdef handle_t* handle_ = <handle_t*><size_t>self.handle.getHandle()
@@ -423,20 +415,24 @@ class TSNE(Base,
         if len(X.shape) != 2:
             raise ValueError("data should be two dimensional")
 
-        if is_sparse(X):
+        X_index = None
+        if not precomputed:
+            if is_sparse(X):
 
-            self.X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
-                                       convert_format=False)
-            n, p = self.X_m.shape
-            self.sparse_fit = True
+                self.X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
+                                           convert_format=False)
+                n, p = self.X_m.shape
+                self.sparse_fit = True
 
-        # Handle dense inputs
-        else:
-            self.X_m, n, p, _ = \
-                input_to_cuml_array(X, order='C', check_dtype=np.float32,
-                                    convert_to_dtype=(np.float32
-                                                      if convert_dtype
-                                                      else None))
+            # Handle dense inputs
+            else:
+                self.X_m, n, p, _ = \
+                    input_to_cuml_array(X, order='C', check_dtype=np.float32,
+                                        convert_to_dtype=(np.float32
+                                                          if convert_dtype
+                                                          else None))
+            X_index = self.X_m.index
+        n, p = X.shape
 
         if n <= 1:
             raise ValueError("There needs to be more than 1 sample to build "
@@ -448,9 +444,12 @@ class TSNE(Base,
                           "# of datapoints = {}.".format(self.perplexity, n))
             self.perplexity = n
 
-        (knn_indices_m, knn_indices_ctype), (knn_dists_m, knn_dists_ctype) =\
-            extract_knn_graph(knn_graph, convert_dtype, self.sparse_fit)
-
+        knn_indices_m, knn_indices_ctype = None, 0
+        knn_dists_m, knn_dists_ctype = None, 0
+        if precomputed:
+            (knn_indices_m, knn_indices_ctype), \
+                (knn_dists_m, knn_dists_ctype) =\
+                extract_knn_graph(X, convert_dtype, self.sparse_fit)
         cdef uintptr_t knn_indices_raw = knn_indices_ctype or 0
         cdef uintptr_t knn_dists_raw = knn_dists_ctype or 0
 
@@ -459,7 +458,7 @@ class TSNE(Base,
             (n, self.n_components),
             order="F",
             dtype=np.float32,
-            index=self.X_m.index)
+            index=X_index)
 
         cdef uintptr_t embed_ptr = self.embedding_.ptr
 
@@ -502,25 +501,9 @@ class TSNE(Base,
 
         cdef float kl_divergence = 0
 
-        if self.sparse_fit:
-            TSNE_fit_sparse(handle_[0],
-                            <int*><uintptr_t>
-                            self.X_m.indptr.ptr,
-                            <int*><uintptr_t>
-                            self.X_m.indices.ptr,
-                            <float*><uintptr_t>
-                            self.X_m.data.ptr,
-                            <float*> embed_ptr,
-                            <int> self.X_m.nnz,
-                            <int> n,
-                            <int> p,
-                            <int*> knn_indices_raw,
-                            <float*> knn_dists_raw,
-                            <TSNEParams&> deref(params),
-                            &kl_divergence)
-        else:
+        if precomputed:
             TSNE_fit(handle_[0],
-                     <float*><uintptr_t> self.X_m.ptr,
+                     <float*><uintptr_t> 0,
                      <float*> embed_ptr,
                      <int> n,
                      <int> p,
@@ -528,6 +511,33 @@ class TSNE(Base,
                      <float*> knn_dists_raw,
                      <TSNEParams&> deref(params),
                      &kl_divergence)
+        else:
+            if self.sparse_fit:
+                TSNE_fit_sparse(handle_[0],
+                                <int*><uintptr_t>
+                                self.X_m.indptr.ptr,
+                                <int*><uintptr_t>
+                                self.X_m.indices.ptr,
+                                <float*><uintptr_t>
+                                self.X_m.data.ptr,
+                                <float*> embed_ptr,
+                                <int> self.X_m.nnz,
+                                <int> n,
+                                <int> p,
+                                <int*> knn_indices_raw,
+                                <float*> knn_dists_raw,
+                                <TSNEParams&> deref(params),
+                                &kl_divergence)
+            else:
+                TSNE_fit(handle_[0],
+                        <float*><uintptr_t> self.X_m.ptr,
+                        <float*> embed_ptr,
+                        <int> n,
+                        <int> p,
+                        <int64_t*> knn_indices_raw,
+                        <float*> knn_dists_raw,
+                        <TSNEParams&> deref(params),
+                        &kl_divergence)
 
         self.handle.sync()
         free(params)
@@ -545,13 +555,13 @@ class TSNE(Base,
                                                        low-dimensional space.',
                                        'shape': '(n_samples, n_components)'})
     @cuml.internals.api_base_fit_transform()
-    def fit_transform(self, X, convert_dtype=True,
-                      knn_graph=None) -> CumlArray:
+    def fit_transform(self, X, precomputed=False,
+                      convert_dtype=True) -> CumlArray:
         """
         Fit X into an embedded space and return that transformed output.
         """
-        return self.fit(X, convert_dtype=convert_dtype,
-                        knn_graph=knn_graph)._transform(X)
+        return self.fit(X, precomputed=precomputed,
+                        convert_dtype=convert_dtype)._transform(X)
 
     def _transform(self, X) -> CumlArray:
         """

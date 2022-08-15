@@ -41,7 +41,8 @@ void TSNE_fit(const raft::handle_t& handle,
               TSNEParams& params,
               float* kl_div)
 {
-  ASSERT(n > 0 && p > 0 && params.dim > 0 && params.n_neighbors > 0 && X != NULL && Y != NULL,
+  ASSERT(n > 0 && p > 0 && params.dim > 0 && params.n_neighbors > 0 && Y != NULL &&
+           (X != NULL || (knn_indices && knn_dists)),
          "Wrong input args");
 
   manifold_dense_inputs_t<float> input(X, Y, n, p);
