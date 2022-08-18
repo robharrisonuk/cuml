@@ -95,38 +95,17 @@ void fit(const raft::handle_t& handle,
          float* y,
          int n,
          int d,
-         knn_indices_dense_t* knn_indices,
-         float* knn_dists,
          UMAPParams* params,
          float* embeddings,
          raft::sparse::COO<float, int>* graph)
 {
-  if (knn_indices != nullptr && knn_dists != nullptr) {
-    CUML_LOG_DEBUG("Calling UMAP::fit() with precomputed KNN");
-
-    manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float> inputs(
-      knn_indices, knn_dists, X, y, n, d, params->n_neighbors);
-    if (y != nullptr) {
-      UMAPAlgo::_fit_supervised<knn_indices_dense_t,
-                                float,
-                                manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float>,
-                                TPB_X>(handle, inputs, params, embeddings, graph);
-    } else {
-      UMAPAlgo::_fit<knn_indices_dense_t,
-                     float,
-                     manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float>,
-                     TPB_X>(handle, inputs, params, embeddings, graph);
-    }
-
+  manifold_dense_inputs_t<float> inputs(X, y, n, d);
+  if (y != nullptr) {
+    UMAPAlgo::_fit_supervised<knn_indices_dense_t, float, manifold_dense_inputs_t<float>, TPB_X>(
+      handle, inputs, params, embeddings, graph);
   } else {
-    manifold_dense_inputs_t<float> inputs(X, y, n, d);
-    if (y != nullptr) {
-      UMAPAlgo::_fit_supervised<knn_indices_dense_t, float, manifold_dense_inputs_t<float>, TPB_X>(
-        handle, inputs, params, embeddings, graph);
-    } else {
-      UMAPAlgo::_fit<knn_indices_dense_t, float, manifold_dense_inputs_t<float>, TPB_X>(
-        handle, inputs, params, embeddings, graph);
-    }
+    UMAPAlgo::_fit<knn_indices_dense_t, float, manifold_dense_inputs_t<float>, TPB_X>(
+      handle, inputs, params, embeddings, graph);
   }
 }
 
@@ -150,6 +129,32 @@ void fit_sparse(const raft::handle_t& handle,
   } else {
     UMAPAlgo::_fit<knn_indices_sparse_t, float, manifold_sparse_inputs_t<int, float>, TPB_X>(
       handle, inputs, params, embeddings, graph);
+  }
+}
+
+void fit_preprocessed(const raft::handle_t& handle,
+                      float* y,
+                      int n,
+                      int d,
+                      knn_indices_dense_t* knn_indices,
+                      float* knn_dists,
+                      UMAPParams* params,
+                      float* embeddings,
+                      raft::sparse::COO<float, int>* graph)
+{
+  CUML_LOG_DEBUG("Calling UMAP::fit() with precomputed KNN");
+  manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float> inputs(
+    knn_indices, knn_dists, nullptr, y, n, d, params->n_neighbors);
+  if (y != nullptr) {
+    UMAPAlgo::_fit_supervised<knn_indices_dense_t,
+                              float,
+                              manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float>,
+                              TPB_X>(handle, inputs, params, embeddings, graph);
+  } else {
+    UMAPAlgo::_fit<knn_indices_dense_t,
+                   float,
+                   manifold_precomputed_knn_inputs_t<knn_indices_dense_t, float>,
+                   TPB_X>(handle, inputs, params, embeddings, graph);
   }
 }
 

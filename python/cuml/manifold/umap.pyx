@@ -77,8 +77,6 @@ cdef extern from "cuml/manifold/umap.hpp" namespace "ML::UMAP":
              float * y,
              int n,
              int d,
-             int64_t * knn_indices,
-             float * knn_dists,
              UMAPParams * params,
              float * embeddings,
              COO * graph) except +
@@ -94,6 +92,16 @@ cdef extern from "cuml/manifold/umap.hpp" namespace "ML::UMAP":
                     UMAPParams *params,
                     float *embeddings,
                     COO * graph) except +
+
+    void fit_preprocessed(handle_t & handle,
+                          float * y,
+                          int n,
+                          int d,
+                          int64_t * knn_indices,
+                          float * knn_dists,
+                          UMAPParams * params,
+                          float * embeddings,
+                          COO * graph) except +
 
     void transform(handle_t & handle,
                    float * X,
@@ -505,14 +513,11 @@ class UMAP(Base,
 
         self.sparse_fit = is_sparse(X) and not precomputed
 
-        knn_indices_m, knn_indices_ctype = None, 0
-        knn_dists_m, knn_dists_ctype = None, 0
         cdef uintptr_t X_ptr = 0
 
         # Precomputed distance matrix in the form of a KNN graph
         if precomputed:
-            (knn_indices_m, knn_indices_ctype),
-            (knn_dists_m, knn_dists_ctype) =\
+            knn_indices_m, knn_dists_m =\
                 extract_knn_graph(X, convert_dtype)
             self.n_rows, self.n_dims = X.shape
             index = None
@@ -565,30 +570,39 @@ class UMAP(Base,
             y_raw = y_m.ptr
 
         fss_graph = GraphHolder.new_graph(handle_.get_stream())
-        if self.sparse_fit:
-            fit_sparse(handle_[0],
-                       <int*><uintptr_t> self.X_m.indptr.ptr,
-                       <int*><uintptr_t> self.X_m.indices.ptr,
-                       <float*><uintptr_t> self.X_m.data.ptr,
-                       <size_t> self.X_m.nnz,
-                       <float*> y_raw,
-                       <int> self.n_rows,
-                       <int> self.n_dims,
-                       <UMAPParams*> umap_params,
-                       <float*> embed_raw,
-                       <COO*> fss_graph.get())
-
+        if precomputed:
+            fit_preprocessed(handle_[0],
+                             <float*> y_raw,
+                             <int> self.n_rows,
+                             <int> self.n_dims,
+                             <int64_t*><uintptr_t> knn_indices_m[1],
+                             <float*><uintptr_t> knn_dists_m[1],
+                             <UMAPParams*>umap_params,
+                             <float*>embed_raw,
+                             <COO*> fss_graph.get())
         else:
-            fit(handle_[0],
-                <float*> X_ptr,
-                <float*> y_raw,
-                <int> self.n_rows,
-                <int> self.n_dims,
-                <int64_t*><uintptr_t> knn_indices_ctype,
-                <float*><uintptr_t> knn_dists_ctype,
-                <UMAPParams*>umap_params,
-                <float*>embed_raw,
-                <COO*> fss_graph.get())
+            if self.sparse_fit:
+                fit_sparse(handle_[0],
+                           <int*><uintptr_t> self.X_m.indptr.ptr,
+                           <int*><uintptr_t> self.X_m.indices.ptr,
+                           <float*><uintptr_t> self.X_m.data.ptr,
+                           <size_t> self.X_m.nnz,
+                           <float*> y_raw,
+                           <int> self.n_rows,
+                           <int> self.n_dims,
+                           <UMAPParams*> umap_params,
+                           <float*> embed_raw,
+                           <COO*> fss_graph.get())
+
+            else:
+                fit(handle_[0],
+                    <float*> X_ptr,
+                    <float*> y_raw,
+                    <int> self.n_rows,
+                    <int> self.n_dims,
+                    <UMAPParams*>umap_params,
+                    <float*>embed_raw,
+                    <COO*> fss_graph.get())
 
         self.graph_ = fss_graph.get_cupy_coo()
 

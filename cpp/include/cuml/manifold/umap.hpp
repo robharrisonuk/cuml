@@ -91,8 +91,6 @@ void refine(const raft::handle_t& handle,
  * @param[in] y: pointer to labels array
  * @param[in] n: n_samples of input array
  * @param[in] d: n_features of input array
- * @param[in] knn_indices: pointer to knn_indices of input (optional)
- * @param[in] knn_dists: pointer to knn_dists of input (optional)
  * @param[in] params: pointer to ML::UMAPParams object
  * @param[out] embeddings: pointer to embedding produced through projection
  * @param[out] graph: pointer to fuzzy simplicial set graph
@@ -102,8 +100,6 @@ void fit(const raft::handle_t& handle,
          float* y,
          int n,
          int d,
-         int64_t* knn_indices,
-         float* knn_dists,
          UMAPParams* params,
          float* embeddings,
          raft::sparse::COO<float, int>* graph);
@@ -134,6 +130,29 @@ void fit_sparse(const raft::handle_t& handle,
                 UMAPParams* params,
                 float* embeddings,
                 raft::sparse::COO<float, int>* graph);
+
+/**
+ * Fit with precomputed KNN
+ *
+ * @param[in] handle: raft::handle_t
+ * @param[in] y: pointer to labels array
+ * @param[in] n: n_samples of input array
+ * @param[in] d: n_features of input array
+ * @param[in] knn_indices: pointer to knn_indices of input
+ * @param[in] knn_dists: pointer to knn_dists of input
+ * @param[in] params: pointer to ML::UMAPParams object
+ * @param[out] embeddings: pointer to embedding produced through projection
+ * @param[out] graph: pointer to fuzzy simplicial set graph
+ */
+void fit_preprocessed(const raft::handle_t& handle,
+                      float* y,
+                      int n,
+                      int d,
+                      int64_t* knn_indices,
+                      float* knn_dists,
+                      UMAPParams* params,
+                      float* embeddings,
+                      raft::sparse::COO<float, int>* graph);
 
 /**
  * Dense transform

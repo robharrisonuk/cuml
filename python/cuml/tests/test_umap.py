@@ -492,14 +492,6 @@ def test_umap_knn_parameters(n_neighbors):
                                    precomputed=True,
                                    convert_dtype=True)
 
-    def transform_embed(knn_graph):
-        model = cuUMAP(random_state=42,
-                       init='random',
-                       n_neighbors=n_neighbors)
-        return model.transform(knn_graph,
-                               precomputed=True,
-                               convert_dtype=True)
-
     def test_trustworthiness(embedding):
         trust = trustworthiness(data, embedding, n_neighbors=n_neighbors)
         assert trust >= 0.92
@@ -516,16 +508,11 @@ def test_umap_knn_parameters(n_neighbors):
     embedding1 = fit_transform_embed(knn_graph.tocsr())
     embedding2 = fit_transform_embed(knn_graph.tocoo())
     embedding3 = fit_transform_embed(knn_graph.tocsc())
-    embedding4 = transform_embed(knn_graph.tocsr())
-    embedding5 = transform_embed(knn_graph.tocoo())
-    embedding6 = transform_embed(knn_graph.tocsc())
 
     test_trustworthiness(embedding1)
 
     test_equality(embedding1, embedding2)
     test_equality(embedding2, embedding3)
-    test_equality(embedding3, embedding4)
-    test_equality(embedding5, embedding6)
 
 
 def correctness_sparse(a, b, atol=0.1, rtol=0.2, threshold=0.95):

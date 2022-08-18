@@ -121,8 +121,6 @@ class UmapSupervised : public UmapBase {
               yFloat,
               this->params.nrows,
               this->params.ncols,
-              nullptr,
-              nullptr,
               &uParams,
               embeddings,
               &graph);
@@ -143,8 +141,6 @@ class UmapUnsupervised : public UmapBase {
               nullptr,
               this->params.nrows,
               this->params.ncols,
-              nullptr,
-              nullptr,
               &uParams,
               embeddings,
               &graph);
@@ -181,8 +177,6 @@ class UmapTransform : public UmapBase {
               yFloat,
               this->params.nrows,
               this->params.ncols,
-              nullptr,
-              nullptr,
               &uParams,
               embeddings,
               &graph);
