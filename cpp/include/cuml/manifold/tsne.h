@@ -121,8 +121,6 @@ struct TSNEParams {
  * @param[out] Y                   The column-major final embedding in device memory
  * @param[in]  n                   Number of rows in data X.
  * @param[in]  p                   Number of columns in data X.
- * @param[in]  knn_indices         Array containing nearest neighors indices.
- * @param[in]  knn_dists           Array containing nearest neighors distances.
  * @param[in]  params              Parameters for TSNE model
  * @param[out] kl_div              (optional) KL divergence output
  *
@@ -138,8 +136,6 @@ void TSNE_fit(const raft::handle_t& handle,
               float* Y,
               int n,
               int p,
-              int64_t* knn_indices,
-              float* knn_dists,
               TSNEParams& params,
               float* kl_div = nullptr);
 
@@ -155,8 +151,6 @@ void TSNE_fit(const raft::handle_t& handle,
  * @param[in]  nnz                 The number of non-zero entries in the CSR.
  * @param[in]  n                   Number of rows in data X.
  * @param[in]  p                   Number of columns in data X.
- * @param[in]  knn_indices         Array containing nearest neighors indices.
- * @param[in]  knn_dists           Array containing nearest neighors distances.
  * @param[in]  params              Parameters for TSNE model
  * @param[out] kl_div              (optional) KL divergence output
  *
@@ -175,9 +169,36 @@ void TSNE_fit_sparse(const raft::handle_t& handle,
                      int nnz,
                      int n,
                      int p,
-                     int* knn_indices,
-                     float* knn_dists,
                      TSNEParams& params,
                      float* kl_div = nullptr);
+
+/**
+ * @brief Dimensionality reduction via TSNE using Barnes-Hut, Fourier Interpolation, or naive
+ * methods. or brute force O(N^2).
+ *
+ * @param[in]  handle              The GPU handle.
+ * @param[out] Y                   The column-major final embedding in device memory
+ * @param[in]  n                   Number of rows in data X.
+ * @param[in]  p                   Number of columns in data X.
+ * @param[in]  knn_indices         Array containing nearest neighors indices.
+ * @param[in]  knn_dists           Array containing nearest neighors distances.
+ * @param[in]  params              Parameters for TSNE model
+ * @param[out] kl_div              (optional) KL divergence output
+ *
+ * The CUDA implementation is derived from the excellent CannyLabs open source
+ * implementation here: https://github.com/CannyLab/tsne-cuda/. The CannyLabs
+ * code is licensed according to the conditions in
+ * cuml/cpp/src/tsne/cannylabs_tsne_license.txt. A full description of their
+ * approach is available in their article t-SNE-CUDA: GPU-Accelerated t-SNE and
+ * its Applications to Modern Data (https://arxiv.org/abs/1807.11824).
+ */
+void TSNE_fit_preprocessed(const raft::handle_t& handle,
+                           float* Y,
+                           int n,
+                           int p,
+                           int64_t* knn_indices,
+                           float* knn_dists,
+                           TSNEParams& params,
+                           float* kl_div = nullptr);
 
 }  // namespace ML

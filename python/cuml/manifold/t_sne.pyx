@@ -93,8 +93,6 @@ cdef extern from "cuml/manifold/tsne.h" namespace "ML":
         float *Y,
         int n,
         int p,
-        int64_t* knn_indices,
-        float* knn_dists,
         TSNEParams &params,
         float* kl_div) except +
 
@@ -107,7 +105,15 @@ cdef extern from "cuml/manifold/tsne.h" namespace "ML":
         int nnz,
         int n,
         int p,
-        int* knn_indices,
+        TSNEParams &params,
+        float* kl_div) except +
+
+    cdef void TSNE_fit_preprocessed(
+        handle_t &handle,
+        float *Y,
+        int n,
+        int p,
+        int64_t* knn_indices,
         float* knn_dists,
         TSNEParams &params,
         float* kl_div) except +
@@ -444,14 +450,9 @@ class TSNE(Base,
                           "# of datapoints = {}.".format(self.perplexity, n))
             self.perplexity = n
 
-        knn_indices_m, knn_indices_ctype = None, 0
-        knn_dists_m, knn_dists_ctype = None, 0
         if precomputed:
-            (knn_indices_m, knn_indices_ctype), \
-                (knn_dists_m, knn_dists_ctype) =\
+            knn_indices_m, knn_dists_m = \
                 extract_knn_graph(X, convert_dtype, self.sparse_fit)
-        cdef uintptr_t knn_indices_raw = knn_indices_ctype or 0
-        cdef uintptr_t knn_dists_raw = knn_dists_ctype or 0
 
         # Prepare output embeddings
         self.embedding_ = CumlArray.zeros(
@@ -502,15 +503,14 @@ class TSNE(Base,
         cdef float kl_divergence = 0
 
         if precomputed:
-            TSNE_fit(handle_[0],
-                     <float*><uintptr_t> 0,
-                     <float*> embed_ptr,
-                     <int> n,
-                     <int> p,
-                     <int64_t*> knn_indices_raw,
-                     <float*> knn_dists_raw,
-                     <TSNEParams&> deref(params),
-                     &kl_divergence)
+            TSNE_fit_preprocessed(handle_[0],
+                                  <float*> embed_ptr,
+                                  <int> n,
+                                  <int> p,
+                                  <int64_t*><uintptr_t> knn_indices_m.ptr,
+                                  <float*><uintptr_t> knn_dists_m.ptr,
+                                  <TSNEParams&> deref(params),
+                                  &kl_divergence)
         else:
             if self.sparse_fit:
                 TSNE_fit_sparse(handle_[0],
@@ -524,20 +524,16 @@ class TSNE(Base,
                                 <int> self.X_m.nnz,
                                 <int> n,
                                 <int> p,
-                                <int*> knn_indices_raw,
-                                <float*> knn_dists_raw,
                                 <TSNEParams&> deref(params),
                                 &kl_divergence)
             else:
                 TSNE_fit(handle_[0],
-                        <float*><uintptr_t> self.X_m.ptr,
-                        <float*> embed_ptr,
-                        <int> n,
-                        <int> p,
-                        <int64_t*> knn_indices_raw,
-                        <float*> knn_dists_raw,
-                        <TSNEParams&> deref(params),
-                        &kl_divergence)
+                         <float*><uintptr_t> self.X_m.ptr,
+                         <float*> embed_ptr,
+                         <int> n,
+                         <int> p,
+                         <TSNEParams&> deref(params),
+                         &kl_divergence)
 
         self.handle.sync()
         free(params)
