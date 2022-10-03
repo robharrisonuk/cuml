@@ -250,6 +250,14 @@ class UMAP(Base,
         consistency of trained embeddings, allowing for reproducible results
         to 3 digits of precision, but will do so at the expense of potentially
         slower training and increased memory usage.
+    precomputed_knn : sparse array-like (device or host)
+        shape=(n_samples, n_samples)
+        A sparse array containing the k-nearest neighbors of X,
+        or a pairwise distance matrix. This allows the use of
+        a custom distance function. This function should match
+        the metric used to train the UMAP embeedings.
+        Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
+        CSR/COO preferred other formats will go through conversion to CSR
     callback: An instance of GraphBasedDimRedCallback class
         Used to intercept the internal state of embeddings while they are being
         trained. Example of callback usage:
@@ -332,6 +340,7 @@ class UMAP(Base,
                  handle=None,
                  hash_input=False,
                  random_state=None,
+                 precomputed_knn=None,
                  callback=None,
                  output_type=None):
 
@@ -393,6 +402,7 @@ class UMAP(Base,
         else:
             raise Exception("Invalid target metric: {}" % target_metric)
 
+        self.precomputed_knn = precomputed_knn
         self.callback = callback  # prevent callback destruction
         self.X_m = None
         self.embedding_ = None
@@ -486,55 +496,55 @@ class UMAP(Base,
     @generate_docstring(convert_dtype_cast='np.float32',
                         X='dense_sparse',
                         skip_parameters_heading=True)
-    def fit(self, X, y=None, precomputed=False,
-            convert_dtype=True) -> "UMAP":
+    def fit(self, X, y=None, convert_dtype=True,
+            knn_graph=None) -> "UMAP":
         """
         Fit X into an embedded space.
 
         Parameters
         ----------
-        precomputed : boolean, False by default
-            When set to True, X should be provided in the form of
-            a sparse array containing the k-nearest neighbors of the input.
-            This allows the use of a custom metrics whereas UMAP
-            would otherwise use the euclidean distance.
-            Acceptable formats for the KNN graph:
-            Sparse SciPy or CuPy ndarray of shape (n_samples1, n_samples2),
-            CSR/COO preferred, other formats will go through conversion to CSR
+        knn_graph : (deprecated) sparse array-like (device or host)
+            shape=(n_samples, n_samples)
+            A sparse array containing the k-nearest neighbors of X,
+            or a pairwise distance matrix. This allows the use of
+            a custom distance function. This function should match
+            the metric used to train the UMAP embeedings.
+            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
+            CSR/COO preferred other formats will go through conversion to CSR
         """
         if len(X.shape) != 2:
             raise ValueError("data should be two dimensional")
 
-        if y is not None and precomputed is True\
-                and self.target_metric != "categorical":
+        if y is not None and self.target_metric != "categorical":
             raise ValueError("Cannot provide a KNN graph when in \
             semi-supervised mode with categorical target_metric for now.")
 
-        self.sparse_fit = is_sparse(X) and not precomputed
-
         cdef uintptr_t X_ptr = 0
 
-        # Precomputed distance matrix in the form of a KNN graph
-        if precomputed:
-            knn_indices_m, knn_dists_m =\
-                extract_knn_graph(X, convert_dtype)
-            self.n_rows, self.n_dims = X.shape
-            index = None
+        if knn_graph is not None:
+            self.precomputed_knn = knn_graph
+
+        # Precomputed knn
+        if self.precomputed_knn is not None:
+            self.knn_indices_m, self.knn_dists_m =\
+                extract_knn_graph(self.precomputed_knn, self.n_neighbors)
+            self.n_rows, self.n_dims = self.precomputed_knn.shape
+            self.index = None
         # Dense input
         elif not is_sparse(X):
             self.X_m, self.n_rows, self.n_dims, dtype = \
                 input_to_cuml_array(X, order='C', check_dtype=np.float32,
                                     convert_to_dtype=(np.float32
-                                                      if convert_dtype
-                                                      else None))
+                                                    if convert_dtype
+                                                    else None))
             X_ptr = self.X_m.ptr
-            index = self.X_m.index
+            self.index = self.X_m.index
         # Sparse input
         else:
             self.X_m = SparseCumlArray(X, convert_to_dtype=cupy.float32,
-                                       convert_format=False)
+                                    convert_format=False)
             self.n_rows, self.n_dims = self.X_m.shape
-            index = self.X_m.index
+            self.index = self.X_m.index
 
         if self.n_rows <= 1:
             raise ValueError("There needs to be more than 1 sample to "
@@ -545,7 +555,7 @@ class UMAP(Base,
         self.embedding_ = CumlArray.zeros((self.n_rows,
                                            self.n_components),
                                           order="C", dtype=np.float32,
-                                          index=index)
+                                          index=self.index)
 
         if self.hash_input:
             with using_output_type("numpy"):
@@ -569,39 +579,43 @@ class UMAP(Base,
             y_raw = y_m.ptr
 
         fss_graph = GraphHolder.new_graph(handle_.get_stream())
-        if precomputed:
+        self.sparse_fit = False
+
+        # Precomputed knn
+        if self.precomputed_knn is not None:
             fit_preprocessed(handle_[0],
                              <float*> y_raw,
                              <int> self.n_rows,
                              <int> self.n_dims,
-                             <int64_t*><uintptr_t> knn_indices_m.ptr,
-                             <float*><uintptr_t> knn_dists_m.ptr,
+                             <int64_t*><uintptr_t> self.knn_indices_m.ptr,
+                             <float*><uintptr_t> self.knn_dists_m.ptr,
                              <UMAPParams*>umap_params,
                              <float*>embed_raw,
                              <COO*> fss_graph.get())
+        # Dense input
+        elif not is_sparse(X):
+            fit(handle_[0],
+                <float*> X_ptr,
+                <float*> y_raw,
+                <int> self.n_rows,
+                <int> self.n_dims,
+                <UMAPParams*>umap_params,
+                <float*>embed_raw,
+                <COO*> fss_graph.get())
+        # Sparse input
         else:
-            if self.sparse_fit:
-                fit_sparse(handle_[0],
-                           <int*><uintptr_t> self.X_m.indptr.ptr,
-                           <int*><uintptr_t> self.X_m.indices.ptr,
-                           <float*><uintptr_t> self.X_m.data.ptr,
-                           <size_t> self.X_m.nnz,
-                           <float*> y_raw,
-                           <int> self.n_rows,
-                           <int> self.n_dims,
-                           <UMAPParams*> umap_params,
-                           <float*> embed_raw,
-                           <COO*> fss_graph.get())
-
-            else:
-                fit(handle_[0],
-                    <float*> X_ptr,
-                    <float*> y_raw,
-                    <int> self.n_rows,
-                    <int> self.n_dims,
-                    <UMAPParams*>umap_params,
-                    <float*>embed_raw,
-                    <COO*> fss_graph.get())
+            self.sparse_fit = True
+            fit_sparse(handle_[0],
+                        <int*><uintptr_t> self.X_m.indptr.ptr,
+                        <int*><uintptr_t> self.X_m.indices.ptr,
+                        <float*><uintptr_t> self.X_m.data.ptr,
+                        <size_t> self.X_m.nnz,
+                        <float*> y_raw,
+                        <int> self.n_rows,
+                        <int> self.n_dims,
+                        <UMAPParams*> umap_params,
+                        <float*> embed_raw,
+                        <COO*> fss_graph.get())
 
         self.graph_ = fss_graph.get_cupy_coo()
 
@@ -620,8 +634,8 @@ class UMAP(Base,
                                                        low-dimensional space.',
                                        'shape': '(n_samples, n_components)'})
     @cuml.internals.api_base_fit_transform()
-    def fit_transform(self, X, y=None, precomputed=False,
-                      convert_dtype=True) -> CumlArray:
+    def fit_transform(self, X, y=None, convert_dtype=True,
+                      knn_graph=None) -> CumlArray:
         """
         Fit X into an embedded space and return that transformed
         output.
@@ -634,17 +648,16 @@ class UMAP(Base,
 
         Parameters
         ----------
-        precomputed : boolean, False by default
-            When set to True, X should be provided in the form of
-            a sparse array containing the k-nearest neighbors of the input.
-            This allows the use of a custom metrics whereas UMAP
-            would otherwise use the euclidean distance.
-            Acceptable formats for the KNN graph:
-            Sparse SciPy or CuPy ndarray of shape (n_samples1, n_samples2),
-            CSR/COO preferred, other formats will go through conversion to CSR
-
+        knn_graph : (deprecated) sparse array-like (device or host)
+            shape=(n_samples, n_samples)
+            A sparse array containing the k-nearest neighbors of X,
+            or a pairwise distance matrix. This allows the use of
+            a custom distance function. This function should match
+            the metric used to train the UMAP embeedings.
+            Acceptable formats: sparse SciPy ndarray, CuPy device ndarray,
+            CSR/COO preferred other formats will go through conversion to CSR
         """
-        self.fit(X, y, precomputed=precomputed, convert_dtype=convert_dtype)
+        self.fit(X, y, convert_dtype=convert_dtype, knn_graph=knn_graph)
 
         return self.embedding_
 

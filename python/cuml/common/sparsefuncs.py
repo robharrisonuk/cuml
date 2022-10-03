@@ -24,6 +24,7 @@ import cuml.internals
 from cuml.common.kernel_utils import cuda_kernel_factory
 from cupyx.scipy.sparse import csr_matrix as cp_csr_matrix,\
     coo_matrix as cp_coo_matrix, csc_matrix as cp_csc_matrix
+from sklearn.neighbors import NearestNeighbors as skNearestNeighbors
 
 
 def _map_l1_norm_kernel(dtype):
@@ -176,7 +177,8 @@ def _insert_zeros(ary, zero_indices):
 
 
 @with_cupy_rmm
-def extract_knn_graph(knn_graph, convert_dtype=True, sparse=False):
+def extract_knn_graph(knn_graph, n_neighbors, convert_dtype=True,
+                      sparse=False):
     """
     Converts KNN graph from CSR, COO and CSC formats into separate
     distance and indice arrays. Input can be a cupy sparse graph (device)
@@ -190,6 +192,11 @@ def extract_knn_graph(knn_graph, convert_dtype=True, sparse=False):
         coo_matrix = DummyClass
         csc_matrix = DummyClass
 
+    convert_to_dtype = None
+    if convert_dtype:
+        convert_to_dtype = np.int32 if sparse else np.int64
+
+    # CSC matrices preprocessing
     if isinstance(knn_graph, (csc_matrix, cp_csc_matrix)):
         knn_graph = cupyx.scipy.sparse.csr_matrix(knn_graph)
         n_samples = knn_graph.shape[0]
@@ -202,17 +209,30 @@ def extract_knn_graph(knn_graph, convert_dtype=True, sparse=False):
         knn_graph.data = knn_graph.data[reordering]
 
     knn_indices = None
+    # CSR matrices
     if isinstance(knn_graph, (csr_matrix, cp_csr_matrix)):
         knn_indices = knn_graph.indices
+        knn_dists = knn_graph.data
+    # COO matrices
     elif isinstance(knn_graph, (coo_matrix, cp_coo_matrix)):
         knn_indices = knn_graph.col
+        knn_dists = knn_graph.data
+    # Dense distance matrix
+    else:
+        distance_matrix = knn_graph
+        n_samples = distance_matrix.shape[0]
+        nn = skNearestNeighbors(n_neighbors=n_neighbors, metric='precomputed')
+        nn.fit(distance_matrix)
+        knn_dists, knn_indices = nn.kneighbors(n_neighbors=n_neighbors,
+                                               return_distance=True)
+        knn_dists = np.column_stack((np.zeros(n_samples),
+                                     knn_dists))[:, :-1].flatten()
+        knn_indices = np.column_stack((np.arange(n_samples),
+                                       knn_indices))[:, :-1].flatten()
+        knn_dists = knn_dists.astype(np.float64)
+        knn_indices = knn_indices.astype(np.int32)
 
     if knn_indices is not None:
-        convert_to_dtype = None
-        if convert_dtype:
-            convert_to_dtype = np.int32 if sparse else np.int64
-
-        knn_dists = knn_graph.data
         knn_indices_m, _, _, _ = \
             input_to_cuml_array(knn_indices, order='C',
                                 deepcopy=True,

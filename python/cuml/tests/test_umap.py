@@ -40,6 +40,8 @@ from sklearn.cluster import KMeans
 from sklearn.datasets import make_blobs
 from sklearn.manifold import trustworthiness
 from sklearn.metrics import adjusted_rand_score
+from cuml.metrics.pairwise_distances import pairwise_distances
+
 
 dataset_names = ['iris', 'digits', 'wine', 'blobs']
 
@@ -483,14 +485,12 @@ def test_umap_knn_parameters(n_neighbors):
         n_samples=2000, n_features=10, centers=5, random_state=0)
     data = data.astype(np.float32)
 
-    def fit_transform_embed(knn_graph):
+    def fit_transform_embed(precomputed_knn):
         model = cuUMAP(random_state=42,
                        init='random',
-                       n_neighbors=n_neighbors)
-        print('type(knn_graph):', type(knn_graph))
-        return model.fit_transform(knn_graph,
-                                   precomputed=True,
-                                   convert_dtype=True)
+                       n_neighbors=n_neighbors,
+                       precomputed_knn=precomputed_knn)
+        return model.fit_transform(data)
 
     def test_trustworthiness(embedding):
         trust = trustworthiness(data, embedding, n_neighbors=n_neighbors)
@@ -501,18 +501,21 @@ def test_umap_knn_parameters(n_neighbors):
         print("mean diff: %s" % mean_diff)
         assert mean_diff < 1.0
 
+    precomputed_dists = pairwise_distances(data)
+    embedding1 = fit_transform_embed(precomputed_dists)
+
     neigh = NearestNeighbors(n_neighbors=n_neighbors)
     neigh.fit(data)
     knn_graph = neigh.kneighbors_graph(data, mode="distance")
-
-    embedding1 = fit_transform_embed(knn_graph.tocsr())
-    embedding2 = fit_transform_embed(knn_graph.tocoo())
-    embedding3 = fit_transform_embed(knn_graph.tocsc())
+    embedding2 = fit_transform_embed(knn_graph.tocsr())
+    embedding3 = fit_transform_embed(knn_graph.tocoo())
+    embedding4 = fit_transform_embed(knn_graph.tocsc())
 
     test_trustworthiness(embedding1)
-
-    test_equality(embedding1, embedding2)
+    test_trustworthiness(embedding2)
+    # test_equality(embedding1, embedding2)
     test_equality(embedding2, embedding3)
+    test_equality(embedding3, embedding4)
 
 
 def correctness_sparse(a, b, atol=0.1, rtol=0.2, threshold=0.95):
